@@ -1,0 +1,88 @@
+name: Scrape Barnivore Data and Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g., v2025.01.06)'
+        required: true
+        default: 'v2025.01.06'
+        type: string
+      api_delay:
+        description: 'API delay in seconds'
+        required: false
+        default: '1.0'
+        type: string
+
+jobs:
+  scrape-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+    
+    - name: Run Barnivore scraper
+      run: |
+        python3 barnivore_scraper.py --db barnivore_${{ github.event.inputs.release_tag }}.db --delay ${{ github.event.inputs.api_delay }}
+    
+    - name: Get database stats
+      id: db_stats
+      run: |
+        stats=$(python3 barnivore_scraper.py --db barnivore_${{ github.event.inputs.release_tag }}.db --stats-only)
+        echo "Database statistics:"
+        echo "$stats"
+        companies=$(echo "$stats" | grep "Companies:" | cut -d' ' -f2)
+        products=$(echo "$stats" | grep "Products:" | cut -d' ' -f2)
+        echo "companies=$companies" >> $GITHUB_OUTPUT
+        echo "products=$products" >> $GITHUB_OUTPUT
+    
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.event.inputs.release_tag }}
+        name: Barnivore Data ${{ github.event.inputs.release_tag }}
+        body: |
+          # Barnivore Vegan Product Database
+          
+          This release contains a SQLite database with vegan beer, wine, and spirits data scraped from Barnivore.com.
+          
+          ## Database Contents
+          - **Companies**: ${{ steps.db_stats.outputs.companies }}
+          - **Products**: ${{ steps.db_stats.outputs.products }}
+          - **Generated**: ${{ github.run_started_at }}
+          
+          ## Usage
+          Download the `barnivore_*.db` file and query it with any SQLite client:
+          
+          ```sql
+          -- Find all vegan companies
+          SELECT companyname, city, state, country FROM company WHERE redyellowgreen = 'green';
+          
+          -- Find vegan products by type
+          SELECT p.productname, c.companyname, p.boozetype 
+          FROM product p 
+          JOIN company c ON p.companyid = c.id 
+          WHERE p.redyellowgreen = 'green' AND p.boozetype = 'beer';
+          ```
+          
+          ## Database Schema
+          - `company` table: Company information and vegan status
+          - `product` table: Individual products linked to companies
+          - `stats` table: Scraping metadata and timestamps
+        files: |
+          barnivore_${{ github.event.inputs.release_tag }}.db
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
